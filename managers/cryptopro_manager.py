@@ -262,3 +262,6 @@ class CryptoproManager:
         logger.info('[ERROR CODE]: %s' % err_code)
         if not self.is_error(err_code):
             return dst_path
+
+# расшифровка зашифрованного файла (из сервиса)
+#/opt/cprocsp/bin/amd64/cryptcp -decr BASE05_07.xlsx.enc BASE05_07.xlsx
