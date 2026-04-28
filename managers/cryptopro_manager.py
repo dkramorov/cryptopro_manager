@@ -51,6 +51,19 @@ class CryptoproManager:
     certmgr = 'certmgr'
     cryptcp = 'cryptcp'
     csptest = 'csptest'
+    cert_keys_mapping = {
+        'Issuer': 'Издатель',
+        'Subject': 'Субъект',
+        'Serial': 'Серийный номер',
+        'SHA1 Thumbprint': 'SHA1 отпечаток',
+        'SubjKeyID': 'Идентификатор ключа',
+        'Signature Algorithm': 'Алгоритм подписи',
+        'PublicKey Algorithm': 'Алгоритм откр. кл.',
+        'Not valid before': 'Выдан',
+        'Not valid after': 'Истекает',
+        'OCSP URL': 'OCSP URL',
+        'CA cert URL': 'URL списка отзыва',
+    }
 
     def __init__(self, bin_folder: str = None):
         """Подготовка к работе
@@ -93,14 +106,57 @@ class CryptoproManager:
             groups = result.groups()
             return groups[0].strip()
 
-    def show_certs(self, sig_path: str = None):
+    def drop_cert(self, thumbprint: str, pin: str = None):
+        """Удаление сертификата
+           :param thumbprint: отпечаток
+           :param pin: пин для контейнера
+        """
+        cmd = '%s -delete -thumbprint %s -silent' % (self.certmgr, thumbprint)
+        if pin:
+            cmd += ' -pin %s' % pin
+        result = system_cmd(cmd)
+        #err_code = self.get_error_code(result)
+        #logger.info('[ERROR CODE]: %s' % err_code)
+        #if not self.is_error(err_code):
+        #    return result
+        return result
+
+    def add_cert(self, cert_path: str, cert_pin: str = None):
+        """Добавление сертификата
+           :param cert_path: путь к сертификату
+           :param pin: пин для контейнера
+           :param cert_type: тип сертификата (-pfx - контейнер с закрытым и открытым ключом)
+        """
+        cert_type = ''
+        if cert_path.endswith('.pfx'):
+            cert_type = '-pfx'
+        cmd = '%s -install %s -file %s -silent' % (self.certmgr, cert_type, cert_path)
+        if cert_pin:
+            cmd += ' -pin %s' % cert_pin
+        result = system_cmd(cmd)
+        err_code = self.get_error_code(result)
+        logger.info('[ERROR CODE]: %s' % err_code)
+        if self.is_error(err_code):
+            return None
+        return result
+
+    def show_certs(self, sig_path: str = None, thumbprint: str = None, cert_pin: str = None):
         """Показывает установленные сертификаты
            Показывает сертификаты из подписанного файла
            :param sig_path: путь к подписанному файлу или самому сертификату (.cer)
+           :param thumbprint: отпечаток
+           :param cert_pin: пин от сертификата
         """
         cmd = '%s -list' % self.certmgr
         if sig_path:
+            cert_type = ''
+            if sig_path.endswith('.pfx'):
+                cmd += ' -pfx'
             cmd += ' -f %s' % sig_path
+            if cert_pin:
+                cmd += ' -pin %s' % cert_pin
+        elif thumbprint:
+            cmd += ' --thumbprint %s' % thumbprint
         return system_cmd(cmd)
 
     def sign(self,
@@ -113,7 +169,7 @@ class CryptoproManager:
         """
         fname = path.split('/')[-1]
         dest = os.path.join(self.signed_folder, '%s.sgn' % fname)
-        cmd = '%s -sign -thumbprint %s %s %s' % (
+        cmd = '%s -sign -thumbprint %s "%s" "%s"' % (
             self.cryptcp,
             cert_thumbprint,
             path,
@@ -146,7 +202,7 @@ class CryptoproManager:
         verify_by = ('-thumbprint %s' % cert_thumbprint) if cert_thumbprint else ''
         if not verify_by:
             verify_by = '-f %s' % path
-        cmd = '%s -verify -nochain %s %s %s' % (
+        cmd = '%s -verify -nochain %s "%s" "%s"' % (
             self.cryptcp,
             verify_by,
             path,
@@ -155,15 +211,34 @@ class CryptoproManager:
         # Добавление таймаута на команду (если найдено несколько сертификатов и запрашивается ввод)
         cmd = 'timeout %s %s' % (timeout, cmd)
         result = system_cmd(cmd)
-        logger.info('\n---\nCryptoproManager [check_sign] %s\n%s\n---' % (path, result))
-        err = self.get_error_code(result)
-        logger.info('[ERROR CODE]: %s' % err)
-        return result
+        logger.info('\n---\n%s\nCryptoproManager [check_sign] %s\n%s\n---' % (cmd, path, result))
+        err_code = self.get_error_code(result)
+        logger.info('[ERROR CODE]: %s' % err_code)
+        if not self.is_error(err_code):
+            return out
 
-    def export_cert(self, sig_path: str, cert_dst: str = None):
+    def export_cert_from_storage(self, thumbprint: str, cert_dst: str = '/tmp/out.cer'):
+        """Экспорт сертификата из хранилища сертификатов (контейнера)
+           :param thumbprint: отпечаток SHA1
+           :param cert_dst: выходной файл с сертификатом
+        """
+        cmd = '%s -export -thumbprint %s -dest %s -base64' % (
+            self.certmgr,
+            thumbprint,
+            cert_dst,
+        )
+        result = system_cmd(cmd)
+        logger.info('\n---\nCryptoproManager [export_cert_from_storage] %s\n%s\n---' % (thumbprint, result))
+        err_code = self.get_error_code(result)
+        logger.info('[ERROR CODE]: %s' % err_code)
+        if not self.is_error(err_code):
+            return cert_dst
+
+    def export_cert_from_sig(self, sig_path: str, cert_dst: str = None):
         """Получение сертификата из подписанного файла
            TODO: обновить название сертификата после экспорта
            :param sig_path: путь к подписанному файлу
+           :param cert_dst: выходной файл с сертификатом
         """
         if not cert_dst:
             cert_folder = os.path.join(self.root_folder, 'certs')
@@ -175,47 +250,31 @@ class CryptoproManager:
             cert_dst,
         )
         result = system_cmd(cmd)
-        logger.info('\n---\nCryptoproManager [export_cert] %s\n%s\n---' % (sig_path, result))
+        logger.info('\n---\nCryptoproManager [export_cert_from_sig] %s\n%s\n---' % (sig_path, result))
         err_code = self.get_error_code(result)
         logger.info('[ERROR CODE]: %s' % err_code)
         if not self.is_error(err_code):
             return cert_dst
 
-    def parse_cert(self, cert_path: str):
-        """Разбор данных по сертификату
-           :param cert_path: путь к сертификату
-           TODO: несколько сертификатов в одном - распарсить
+    def parse_cert_info(self, cert_info: str):
+        """Разбор данных по всем сертификатам
+           :param cert_info: текстовая информация по сертификату
         """
         certs = []
-        keys_mapping = {
-            'Issuer': 'Издатель',
-            'Subject': 'Субъект',
-            'Serial': 'Серийный номер',
-            'SHA1 Thumbprint': 'SHA1 отпечаток',
-            'SubjKeyID': 'Идентификатор ключа',
-            'Signature Algorithm': 'Алгоритм подписи',
-            'PublicKey Algorithm': 'Алгоритм откр. кл.',
-            'Not valid before': 'Выдан',
-            'Not valid after': 'Истекает',
-            'OCSP URL': 'OCSP URL',
-            'CA cert URL': 'URL списка отзыва',
-        }
-        keys = list(keys_mapping.keys())
-        values = list(keys_mapping.values())
-
         cert_number = 1
-        cert_info = self.show_certs(sig_path=cert_path)
-        err_code = self.get_error_code(cert_info)
-        if self.is_error(err_code):
-            assert False
+
+        keys = list(self.cert_keys_mapping.keys())
+        values = list(self.cert_keys_mapping.values())
+
         cert_info = cert_info.split('\n')
         cert = {}
         for item in cert_info:
             # Если нашелся следующий сертификат, то текущий добавляем в список
             if item.startswith('%s-----' % cert_number):
                 cert_number += 1
-                certs.append(cert)
-                cert = {}
+                if cert:
+                    certs.append(cert)
+                    cert = {}
             if not ':' in item:
                 continue
             key, value = item.split(':', 1)
@@ -229,7 +288,7 @@ class CryptoproManager:
                 value = value[:-2]
             cert[key] = value.strip()
             if key in ('Not valid before', 'Not valid after'):
-                cert[key] = rega_spaces.sub(' ', cert[key])
+                cert[key] = kill_quotes(cert[key], rega='spaces', replace=' ')
                 cert[key] = str_to_date(cert[key])
             elif key in ('Subject'):
                 search_inn = rega_inn.search(cert[key])
@@ -237,6 +296,22 @@ class CryptoproManager:
                     cert['inn'] = search_inn.group(1)
         if cert:
             certs.append(cert)
+        return certs
+
+    def parse_cert(self, cert_path: str = None, thumbprint: str = None):
+        """Разбор данных по сертификату
+           :param cert_path: путь к сертификату
+           :param thumbprint: отпечаток
+           TODO: несколько сертификатов в одном - распарсить
+        """
+        certs = []
+
+        cert_info = self.show_certs(sig_path=cert_path, thumbprint=thumbprint)
+        err_code = self.get_error_code(cert_info)
+        if self.is_error(err_code):
+            assert False
+
+        certs = self.parse_cert_info(cert_info=cert_info)
         #print(json_pretty_print(certs))
         for cert in certs:
             if cert.get('OCSP URL'):
@@ -250,7 +325,7 @@ class CryptoproManager:
         """
         if not dst_path:
             dst_path = '%s.enc' % src_path
-        cmd = '%s -encr -nochain -f %s %s %s' % (
+        cmd = '%s -encr -nochain -f "%s" "%s" "%s"' % (
             self.cryptcp,
             cert_path,
             src_path,
@@ -263,5 +338,30 @@ class CryptoproManager:
         if not self.is_error(err_code):
             return dst_path
 
-# расшифровка зашифрованного файла (из сервиса)
-#/opt/cprocsp/bin/amd64/cryptcp -decr BASE05_07.xlsx.enc BASE05_07.xlsx
+    def decrypt(self, thumbprint: str, src_path: str, dst_path: str = None, pin: str = None):
+        """Расшифровать файл
+           :param thumbprint: отпечаток сертификата, которым расшифровываем
+           :param src_path: путь к файлу для расшифровки
+           :param dst_path: путь к выходному расшифрованному файлу
+           :param pin: пин для сертификата
+        """
+        if not dst_path:
+            dst_path = src_path.rsplit('.', 1)[0]
+
+        if pin:
+            pin = '-pin %s' % pin
+        else:
+            pin = ''
+        cmd = '%s -decr -nochain -thumbprint %s %s "%s" "%s"' % (
+            self.cryptcp,
+            thumbprint,
+            pin,
+            src_path,
+            dst_path,
+        )
+        result = system_cmd(cmd)
+        logger.info('\n---\nCryptoproManager [decrypt] %s\n%s\n---' % (src_path, result))
+        err_code = self.get_error_code(result)
+        logger.info('[ERROR CODE]: %s' % err_code)
+        if not self.is_error(err_code):
+            return dst_path
