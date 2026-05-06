@@ -121,7 +121,7 @@ class CryptoproManager:
         #    return result
         return result
 
-    def add_cert(self, cert_path: str, cert_pin: str = None):
+    def add_cert(self, cert_path: str, cert_pin: str = None, store: str = None):
         """Добавление сертификата
            :param cert_path: путь к сертификату
            :param pin: пин для контейнера
@@ -133,6 +133,8 @@ class CryptoproManager:
         cmd = '%s -install %s -file %s -silent' % (self.certmgr, cert_type, cert_path)
         if cert_pin:
             cmd += ' -pin %s' % cert_pin
+        if store:
+            cmd += ' -store %s' % store
         result = system_cmd(cmd)
         err_code = self.get_error_code(result)
         logger.info('[ERROR CODE]: %s' % err_code)
@@ -162,13 +164,16 @@ class CryptoproManager:
     def sign(self,
              cert_thumbprint: str,
              path: str,
-             timeout: int = 10):
+             timeout: int = 10,
+             result_ext: str = 'sgn'):
         """Подписать файл
            :param cert_thumbprint: отпечаток сертификата
            :param path: путь к файлу, который хотим подписать
+           :param timeout: таймаут
+           :param result_ext: расширение результирующего файла
         """
         fname = path.split('/')[-1]
-        dest = os.path.join(self.signed_folder, '%s.sgn' % fname)
+        dest = os.path.join(self.signed_folder, '%s.%s' % (fname, result_ext))
         cmd = '%s -sign -thumbprint %s "%s" "%s"' % (
             self.cryptcp,
             cert_thumbprint,
